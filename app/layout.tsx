@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Wavefront Studio — Interactive 2D FDTD",
-  description: "Explore an 850 nm wave interacting with a dielectric nanopillar in a real-time browser simulation.",
+  description: "Explore electric field, intensity, and phase as an optical wave interacts with a dielectric nanopillar.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

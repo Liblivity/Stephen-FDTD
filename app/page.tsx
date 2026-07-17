@@ -6,6 +6,7 @@ const NX = 180;
 const NY = 120;
 const PML = 12;
 const COURANT = 0.48;
+const MONITOR_X = Math.round(NX * 0.76);
 
 type Params = {
   wavelength: number;
@@ -23,6 +24,9 @@ type Engine = {
   epsilon: Float32Array;
   damping: Float32Array;
   image: ImageData;
+  monitorRe: Float64Array;
+  monitorIm: Float64Array;
+  monitorSamples: number;
   step: number;
   periodSteps: number;
   dxNm: number;
@@ -71,6 +75,9 @@ function createEngine(params: Params): Engine {
     epsilon,
     damping,
     image: new ImageData(NX, NY),
+    monitorRe: new Float64Array(NY),
+    monitorIm: new Float64Array(NY),
+    monitorSamples: 0,
     step: 0,
     periodSteps: 20 / COURANT,
     dxNm,
@@ -106,6 +113,19 @@ function advance(engine: Engine, params: Params) {
     params.amplitude * ramp * Math.sin((2 * Math.PI * engine.step) / engine.periodSteps);
   for (let y = PML + 2; y < NY - PML - 2; y++) {
     ez[sourceX + y * NX] += source;
+  }
+
+  // Frequency-domain monitor: accumulate Ez * exp(-i omega t) after transients.
+  if (engine.step > engine.periodSteps * 7) {
+    const angle = (2 * Math.PI * engine.step) / engine.periodSteps;
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    for (let y = PML; y < NY - PML; y++) {
+      const value = ez[MONITOR_X + y * NX];
+      engine.monitorRe[y] += value * cosine;
+      engine.monitorIm[y] -= value * sine;
+    }
+    engine.monitorSamples += 1;
   }
   engine.step += 1;
 }
@@ -146,6 +166,109 @@ function render(engine: Engine, canvas: HTMLCanvasElement) {
   context.moveTo(PML + 5, PML + 2);
   context.lineTo(PML + 5, NY - PML - 2);
   context.stroke();
+  context.save();
+  context.strokeStyle = "#f2a93b";
+  context.lineWidth = 0.8;
+  context.setLineDash([2, 2]);
+  context.beginPath();
+  context.moveTo(MONITOR_X, PML);
+  context.lineTo(MONITOR_X, NY - PML);
+  context.stroke();
+  context.restore();
+}
+
+function drawProfile(
+  canvas: HTMLCanvasElement,
+  values: number[],
+  minimum: number,
+  maximum: number,
+  color: string,
+  emptyMessage: string,
+) {
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const left = 42;
+  const right = 14;
+  const top = 15;
+  const bottom = 28;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#fbfaf6";
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = "#d9d7d0";
+  context.lineWidth = 1;
+  context.font = "10px ui-monospace, monospace";
+  context.fillStyle = "#77808a";
+  context.textAlign = "right";
+  for (let tick = 0; tick <= 4; tick++) {
+    const y = top + ((height - top - bottom) * tick) / 4;
+    const value = maximum - ((maximum - minimum) * tick) / 4;
+    context.beginPath();
+    context.moveTo(left, y);
+    context.lineTo(width - right, y);
+    context.stroke();
+    context.fillText(value.toFixed(maximum <= 1.01 ? 2 : 1), left - 7, y + 3);
+  }
+  context.strokeStyle = "#7c817f";
+  context.beginPath();
+  context.moveTo(left, top);
+  context.lineTo(left, height - bottom);
+  context.lineTo(width - right, height - bottom);
+  context.stroke();
+  context.textAlign = "center";
+  context.fillText("transverse position y", (left + width - right) / 2, height - 8);
+
+  if (!values.length) {
+    context.fillStyle = "#8b918f";
+    context.font = "12px ui-sans-serif, system-ui";
+    context.fillText(emptyMessage, (left + width - right) / 2, height / 2 + 3);
+    return;
+  }
+
+  context.strokeStyle = color;
+  context.lineWidth = 2;
+  context.beginPath();
+  let drawing = false;
+  values.forEach((value, index) => {
+    if (!Number.isFinite(value)) {
+      drawing = false;
+      return;
+    }
+    const x = left + ((width - left - right) * index) / Math.max(1, values.length - 1);
+    const y = top + (height - top - bottom) * (1 - (value - minimum) / (maximum - minimum));
+    if (!drawing) context.moveTo(x, y);
+    else context.lineTo(x, y);
+    drawing = true;
+  });
+  context.stroke();
+}
+
+function renderProfiles(engine: Engine, intensityCanvas: HTMLCanvasElement, phaseCanvas: HTMLCanvasElement) {
+  if (engine.monitorSamples < 10) {
+    const wait = `Collecting after ${Math.ceil(engine.periodSteps * 7)} steps`;
+    drawProfile(intensityCanvas, [], 0, 1, "#19785e", wait);
+    drawProfile(phaseCanvas, [], -Math.PI, Math.PI, "#b2233a", wait);
+    return;
+  }
+  const intensity: number[] = [];
+  const phase: number[] = [];
+  let peak = 0;
+  for (let y = PML; y < NY - PML; y++) {
+    const re = engine.monitorRe[y] / engine.monitorSamples;
+    const im = engine.monitorIm[y] / engine.monitorSamples;
+    const value = re * re + im * im;
+    intensity.push(value);
+    peak = Math.max(peak, value);
+  }
+  const scale = peak || 1;
+  for (let index = 0; index < intensity.length; index++) {
+    intensity[index] /= scale;
+    const y = index + PML;
+    phase.push(intensity[index] < 0.01 ? Number.NaN : Math.atan2(engine.monitorIm[y], engine.monitorRe[y]));
+  }
+  drawProfile(intensityCanvas, intensity, 0, 1, "#19785e", "Collecting field samples");
+  drawProfile(phaseCanvas, phase, -Math.PI, Math.PI, "#b2233a", "Collecting field samples");
 }
 
 function Slider({
@@ -186,6 +309,8 @@ function Slider({
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const intensityRef = useRef<HTMLCanvasElement>(null);
+  const phaseRef = useRef<HTMLCanvasElement>(null);
   const paramsRef = useRef(defaults);
   const engineRef = useRef<Engine>(createEngine(defaults));
   const runningRef = useRef(true);
@@ -197,6 +322,7 @@ export default function Home() {
     engineRef.current = createEngine(next);
     setDisplayStep(0);
     if (canvasRef.current) render(engineRef.current, canvasRef.current);
+    if (intensityRef.current && phaseRef.current) renderProfiles(engineRef.current, intensityRef.current, phaseRef.current);
   }, []);
 
   const changeParam = (key: keyof Params, value: number, resetField = true) => {
@@ -210,6 +336,7 @@ export default function Home() {
     const engine = engineRef.current;
     advance(engine, paramsRef.current);
     if (canvasRef.current) render(engine, canvasRef.current);
+    if (intensityRef.current && phaseRef.current) renderProfiles(engine, intensityRef.current, phaseRef.current);
     setDisplayStep(engine.step);
   };
 
@@ -225,12 +352,14 @@ export default function Home() {
         if (canvasRef.current) render(engine, canvasRef.current);
         if (time - lastUiUpdate > 120) {
           setDisplayStep(engine.step);
+          if (intensityRef.current && phaseRef.current) renderProfiles(engine, intensityRef.current, phaseRef.current);
           lastUiUpdate = time;
         }
       }
       animationId = requestAnimationFrame(loop);
     };
     if (canvasRef.current) render(engineRef.current, canvasRef.current);
+    if (intensityRef.current && phaseRef.current) renderProfiles(engineRef.current, intensityRef.current, phaseRef.current);
     animationId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationId);
   }, []);
@@ -295,9 +424,10 @@ export default function Home() {
             <div className="legend"><span className="negative" /> −1 <span className="gradient" /> +1</div>
           </div>
           <div className="canvas-wrap">
-            <canvas ref={canvasRef} width={NX} height={NY} aria-label="Animated electric field simulation" />
+            <canvas className="field-canvas" ref={canvasRef} width={NX} height={NY} aria-label="Animated electric field simulation" />
             <span className="axis axis-y">y</span><span className="axis axis-x">x</span>
             <span className="source-label">source</span>
+            <span className="monitor-label">DFT monitor</span>
           </div>
           <div className="transport">
             <div className="buttons">
@@ -308,6 +438,24 @@ export default function Home() {
             <div className="readout"><span>Step <strong>{displayStep.toLocaleString()}</strong></span><span>Time <strong>{timeFs.toFixed(2)} fs</strong></span></div>
           </div>
         </section>
+      </section>
+
+      <section className="panel analysis-panel">
+        <div className="analysis-head">
+          <div><span className="section-number">03</span><h3>Frequency-domain monitor</h3></div>
+          <p>Complex field sampled behind the pillar at x = {(MONITOR_X * engine.dxNm / 1000).toFixed(2)} µm</p>
+        </div>
+        <div className="charts-grid">
+          <article className="chart-card">
+            <div><div><span className="chart-dot intensity-dot" /><h4>Intensity distribution</h4></div><code>|Ẽ<sub>z</sub>|² / max</code></div>
+            <canvas ref={intensityRef} width={520} height={205} aria-label="Normalized intensity distribution across the monitor plane" />
+          </article>
+          <article className="chart-card">
+            <div><div><span className="chart-dot phase-dot" /><h4>Phase distribution</h4></div><code>arg(Ẽ<sub>z</sub>) [rad]</code></div>
+            <canvas ref={phaseRef} width={520} height={205} aria-label="Wrapped phase distribution across the monitor plane" />
+          </article>
+        </div>
+        <p className="analysis-note">The monitor extracts the 850 nm complex component using Ẽ<sub>z</sub>(y) = Σ E<sub>z</sub>(y,t) e<sup>−iωt</sup>. Phase is hidden where intensity is below 1% of the peak.</p>
       </section>
 
       <section className="metrics">

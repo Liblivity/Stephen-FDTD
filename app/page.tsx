@@ -5,8 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const NX = 180;
 const NY = 120;
 const PML = 12;
-const COURANT = 0.48;
-const MONITOR_X = Math.round(NX * 0.76);
+const CFL_SAFETY = 0.96;
+
+type Point = { x: number; y: number; index: number };
 
 type Params = {
   wavelength: number;
@@ -15,6 +16,17 @@ type Params = {
   pillarLength: number;
   amplitude: number;
   stepsPerFrame: number;
+  windowWidth: number;
+  windowHeight: number;
+  pillarX: number;
+  pillarY: number;
+  pillarAngle: number;
+  sourceX: number;
+  sourceY: number;
+  sourceAngle: number;
+  monitorX: number;
+  monitorY: number;
+  monitorAngle: number;
 };
 
 type Engine = {
@@ -30,7 +42,13 @@ type Engine = {
   step: number;
   periodSteps: number;
   dxNm: number;
-  pillar: { x1: number; x2: number; y1: number; y2: number };
+  dyNm: number;
+  dtNmC: number;
+  coefficientX: number;
+  coefficientY: number;
+  pillarPoints: Point[];
+  sourcePoints: Point[];
+  monitorPoints: Point[];
 };
 
 const defaults: Params = {
@@ -40,24 +58,74 @@ const defaults: Params = {
   pillarLength: 700,
   amplitude: 0.65,
   stepsPerFrame: 3,
+  windowWidth: 7.65,
+  windowHeight: 5.1,
+  pillarX: 54,
+  pillarY: 50,
+  pillarAngle: 0,
+  sourceX: 12,
+  sourceY: 50,
+  sourceAngle: 0,
+  monitorX: 76,
+  monitorY: 50,
+  monitorAngle: 0,
 };
+
+function buildLinePoints(
+  centerXNm: number,
+  centerYNm: number,
+  normalAngleDegrees: number,
+  widthNm: number,
+  heightNm: number,
+  dxNm: number,
+  dyNm: number,
+): Point[] {
+  const angle = (normalAngleDegrees * Math.PI) / 180;
+  const tangentX = -Math.sin(angle);
+  const tangentY = Math.cos(angle);
+  const halfSpan = Math.hypot(widthNm, heightNm) * 0.55;
+  const points: Point[] = [];
+  const seen = new Set<number>();
+  const samples = Math.max(NX, NY) * 3;
+  for (let sample = 0; sample <= samples; sample++) {
+    const distance = -halfSpan + (2 * halfSpan * sample) / samples;
+    const x = Math.round((centerXNm + tangentX * distance) / dxNm);
+    const y = Math.round((centerYNm + tangentY * distance) / dyNm);
+    if (x < PML || x >= NX - PML || y < PML || y >= NY - PML) continue;
+    const index = x + y * NX;
+    if (!seen.has(index)) {
+      points.push({ x, y, index });
+      seen.add(index);
+    }
+  }
+  return points;
+}
 
 function createEngine(params: Params): Engine {
   const size = NX * NY;
-  const dxNm = params.wavelength / 20;
+  const widthNm = params.windowWidth * 1000;
+  const heightNm = params.windowHeight * 1000;
+  const dxNm = widthNm / NX;
+  const dyNm = heightNm / NY;
+  const dtNmC = CFL_SAFETY / Math.sqrt(dxNm ** -2 + dyNm ** -2);
+  const coefficientX = dtNmC / dxNm;
+  const coefficientY = dtNmC / dyNm;
   const epsilon = new Float32Array(size).fill(1);
   const damping = new Float32Array(size).fill(1);
-  const widthCells = Math.max(1, Math.round(params.pillarWidth / dxNm));
-  const lengthCells = Math.max(1, Math.round(params.pillarLength / dxNm));
-  const x1 = Math.round(NX * 0.54 - lengthCells / 2);
-  const x2 = x1 + lengthCells;
-  const y1 = Math.round(NY / 2 - widthCells / 2);
-  const y2 = y1 + widthCells;
+  const pillarCenterX = (params.pillarX / 100) * widthNm;
+  const pillarCenterY = (params.pillarY / 100) * heightNm;
+  const pillarAngle = (params.pillarAngle * Math.PI) / 180;
+  const cosPillar = Math.cos(pillarAngle);
+  const sinPillar = Math.sin(pillarAngle);
 
   for (let y = 0; y < NY; y++) {
     for (let x = 0; x < NX; x++) {
       const i = x + y * NX;
-      if (x >= x1 && x < x2 && y >= y1 && y < y2) {
+      const relativeX = (x + 0.5) * dxNm - pillarCenterX;
+      const relativeY = (y + 0.5) * dyNm - pillarCenterY;
+      const localX = cosPillar * relativeX + sinPillar * relativeY;
+      const localY = -sinPillar * relativeX + cosPillar * relativeY;
+      if (Math.abs(localX) <= params.pillarLength / 2 && Math.abs(localY) <= params.pillarWidth / 2) {
         epsilon[i] = params.refractiveIndex ** 2;
       }
       const edge = Math.min(x, y, NX - 1 - x, NY - 1 - y);
@@ -68,6 +136,37 @@ function createEngine(params: Params): Engine {
     }
   }
 
+  const pillarPoints = [
+    [-params.pillarLength / 2, -params.pillarWidth / 2],
+    [params.pillarLength / 2, -params.pillarWidth / 2],
+    [params.pillarLength / 2, params.pillarWidth / 2],
+    [-params.pillarLength / 2, params.pillarWidth / 2],
+  ].map(([localX, localY]) => {
+    const physicalX = pillarCenterX + cosPillar * localX - sinPillar * localY;
+    const physicalY = pillarCenterY + sinPillar * localX + cosPillar * localY;
+    const x = physicalX / dxNm;
+    const y = physicalY / dyNm;
+    return { x, y, index: Math.round(x) + Math.round(y) * NX };
+  });
+  const sourcePoints = buildLinePoints(
+    (params.sourceX / 100) * widthNm,
+    (params.sourceY / 100) * heightNm,
+    params.sourceAngle,
+    widthNm,
+    heightNm,
+    dxNm,
+    dyNm,
+  );
+  const monitorPoints = buildLinePoints(
+    (params.monitorX / 100) * widthNm,
+    (params.monitorY / 100) * heightNm,
+    params.monitorAngle,
+    widthNm,
+    heightNm,
+    dxNm,
+    dyNm,
+  );
+
   return {
     ez: new Float32Array(size),
     hx: new Float32Array(size),
@@ -75,56 +174,60 @@ function createEngine(params: Params): Engine {
     epsilon,
     damping,
     image: new ImageData(NX, NY),
-    monitorRe: new Float64Array(NY),
-    monitorIm: new Float64Array(NY),
+    monitorRe: new Float64Array(monitorPoints.length),
+    monitorIm: new Float64Array(monitorPoints.length),
     monitorSamples: 0,
     step: 0,
-    periodSteps: 20 / COURANT,
+    periodSteps: params.wavelength / dtNmC,
     dxNm,
-    pillar: { x1, x2, y1, y2 },
+    dyNm,
+    dtNmC,
+    coefficientX,
+    coefficientY,
+    pillarPoints,
+    sourcePoints,
+    monitorPoints,
   };
 }
 
 function advance(engine: Engine, params: Params) {
-  const { ez, hx, hy, epsilon, damping } = engine;
+  const { ez, hx, hy, epsilon, damping, coefficientX, coefficientY } = engine;
   for (let y = 0; y < NY - 1; y++) {
     for (let x = 0; x < NX; x++) {
       const i = x + y * NX;
-      hx[i] = (hx[i] - COURANT * (ez[i + NX] - ez[i])) * damping[i];
+      hx[i] = (hx[i] - coefficientY * (ez[i + NX] - ez[i])) * damping[i];
     }
   }
   for (let y = 0; y < NY; y++) {
     for (let x = 0; x < NX - 1; x++) {
       const i = x + y * NX;
-      hy[i] = (hy[i] + COURANT * (ez[i + 1] - ez[i])) * damping[i];
+      hy[i] = (hy[i] + coefficientX * (ez[i + 1] - ez[i])) * damping[i];
     }
   }
   for (let y = 1; y < NY - 1; y++) {
     for (let x = 1; x < NX - 1; x++) {
       const i = x + y * NX;
-      const curl = hy[i] - hy[i - 1] - hx[i] + hx[i - NX];
-      ez[i] = (ez[i] + (COURANT / epsilon[i]) * curl) * damping[i];
+      const curlX = coefficientX * (hy[i] - hy[i - 1]);
+      const curlY = coefficientY * (hx[i] - hx[i - NX]);
+      ez[i] = (ez[i] + (curlX - curlY) / epsilon[i]) * damping[i];
     }
   }
 
-  const sourceX = PML + 5;
   const ramp = 1 - Math.exp(-((engine.step / (engine.periodSteps * 3)) ** 2));
   const source =
     params.amplitude * ramp * Math.sin((2 * Math.PI * engine.step) / engine.periodSteps);
-  for (let y = PML + 2; y < NY - PML - 2; y++) {
-    ez[sourceX + y * NX] += source;
-  }
+  engine.sourcePoints.forEach((point) => { ez[point.index] += source; });
 
   // Frequency-domain monitor: accumulate Ez * exp(-i omega t) after transients.
   if (engine.step > engine.periodSteps * 7) {
     const angle = (2 * Math.PI * engine.step) / engine.periodSteps;
     const cosine = Math.cos(angle);
     const sine = Math.sin(angle);
-    for (let y = PML; y < NY - PML; y++) {
-      const value = ez[MONITOR_X + y * NX];
-      engine.monitorRe[y] += value * cosine;
-      engine.monitorIm[y] -= value * sine;
-    }
+    engine.monitorPoints.forEach((point, index) => {
+      const value = ez[point.index];
+      engine.monitorRe[index] += value * cosine;
+      engine.monitorIm[index] -= value * sine;
+    });
     engine.monitorSamples += 1;
   }
   engine.step += 1;
@@ -156,23 +259,36 @@ function render(engine: Engine, canvas: HTMLCanvasElement) {
   if (!context) return;
   context.putImageData(engine.image, 0, 0);
 
-  const p = engine.pillar;
   context.strokeStyle = "#07111f";
   context.lineWidth = 1.2;
-  context.strokeRect(p.x1, NY - p.y2, p.x2 - p.x1, p.y2 - p.y1);
+  context.beginPath();
+  engine.pillarPoints.forEach((point, index) => {
+    if (index === 0) context.moveTo(point.x, NY - point.y);
+    else context.lineTo(point.x, NY - point.y);
+  });
+  context.closePath();
+  context.stroke();
   context.strokeStyle = "#5df2c2";
   context.lineWidth = 0.8;
   context.beginPath();
-  context.moveTo(PML + 5, PML + 2);
-  context.lineTo(PML + 5, NY - PML - 2);
+  const sourceStart = engine.sourcePoints[0];
+  const sourceEnd = engine.sourcePoints.at(-1);
+  if (sourceStart && sourceEnd) {
+    context.moveTo(sourceStart.x, NY - sourceStart.y);
+    context.lineTo(sourceEnd.x, NY - sourceEnd.y);
+  }
   context.stroke();
   context.save();
   context.strokeStyle = "#f2a93b";
   context.lineWidth = 0.8;
   context.setLineDash([2, 2]);
   context.beginPath();
-  context.moveTo(MONITOR_X, PML);
-  context.lineTo(MONITOR_X, NY - PML);
+  const monitorStart = engine.monitorPoints[0];
+  const monitorEnd = engine.monitorPoints.at(-1);
+  if (monitorStart && monitorEnd) {
+    context.moveTo(monitorStart.x, NY - monitorStart.y);
+    context.lineTo(monitorEnd.x, NY - monitorEnd.y);
+  }
   context.stroke();
   context.restore();
 }
@@ -217,7 +333,7 @@ function drawProfile(
   context.lineTo(width - right, height - bottom);
   context.stroke();
   context.textAlign = "center";
-  context.fillText("transverse position y", (left + width - right) / 2, height - 8);
+  context.fillText("position along monitor", (left + width - right) / 2, height - 8);
 
   if (!values.length) {
     context.fillStyle = "#8b918f";
@@ -254,9 +370,9 @@ function renderProfiles(engine: Engine, intensityCanvas: HTMLCanvasElement, phas
   const intensity: number[] = [];
   const phase: number[] = [];
   let peak = 0;
-  for (let y = PML; y < NY - PML; y++) {
-    const re = engine.monitorRe[y] / engine.monitorSamples;
-    const im = engine.monitorIm[y] / engine.monitorSamples;
+  for (let index = 0; index < engine.monitorPoints.length; index++) {
+    const re = engine.monitorRe[index] / engine.monitorSamples;
+    const im = engine.monitorIm[index] / engine.monitorSamples;
     const value = re * re + im * im;
     intensity.push(value);
     peak = Math.max(peak, value);
@@ -264,8 +380,7 @@ function renderProfiles(engine: Engine, intensityCanvas: HTMLCanvasElement, phas
   const scale = peak || 1;
   for (let index = 0; index < intensity.length; index++) {
     intensity[index] /= scale;
-    const y = index + PML;
-    phase.push(intensity[index] < 0.01 ? Number.NaN : Math.atan2(engine.monitorIm[y], engine.monitorRe[y]));
+    phase.push(intensity[index] < 0.01 ? Number.NaN : Math.atan2(engine.monitorIm[index], engine.monitorRe[index]));
   }
   drawProfile(intensityCanvas, intensity, 0, 1, "#19785e", "Collecting field samples");
   drawProfile(phaseCanvas, phase, -Math.PI, Math.PI, "#b2233a", "Collecting field samples");
@@ -371,7 +486,8 @@ export default function Home() {
   };
 
   const engine = engineRef.current;
-  const timeFs = displayStep * COURANT * engine.dxNm / 299.792458;
+  const timeFs = displayStep * engine.dtNmC / 299.792458;
+  const cellsPerWavelength = params.wavelength / Math.max(engine.dxNm, engine.dyNm);
 
   return (
     <main>
@@ -404,10 +520,30 @@ export default function Home() {
             <Slider label="Source amplitude" value={params.amplitude} min={0.1} max={1} step={0.05} unit="" onChange={(v) => changeParam("amplitude", v, false)} />
           </div>
           <div className="control-group">
+            <p className="group-label">Simulation window</p>
+            <Slider label="Window width" value={params.windowWidth} min={5} max={18} step={0.25} unit=" µm" onChange={(v) => changeParam("windowWidth", v)} />
+            <Slider label="Window height" value={params.windowHeight} min={3} max={12} step={0.25} unit=" µm" onChange={(v) => changeParam("windowHeight", v)} />
+          </div>
+          <div className="control-group">
             <p className="group-label">Nanopillar</p>
             <Slider label="Refractive index" value={params.refractiveIndex} min={1} max={4} step={0.1} unit="" onChange={(v) => changeParam("refractiveIndex", v)} />
             <Slider label="Width" value={params.pillarWidth} min={100} max={800} step={25} unit=" nm" onChange={(v) => changeParam("pillarWidth", v)} />
             <Slider label="Length" value={params.pillarLength} min={200} max={1600} step={50} unit=" nm" onChange={(v) => changeParam("pillarLength", v)} />
+            <Slider label="Position x" value={params.pillarX} min={20} max={80} step={1} unit="%" onChange={(v) => changeParam("pillarX", v)} />
+            <Slider label="Position y" value={params.pillarY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("pillarY", v)} />
+            <Slider label="Orientation" value={params.pillarAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("pillarAngle", v)} />
+          </div>
+          <div className="control-group">
+            <p className="group-label"><span className="geometry-dot source-dot" />Source geometry</p>
+            <Slider label="Position x" value={params.sourceX} min={8} max={45} step={1} unit="%" onChange={(v) => changeParam("sourceX", v)} />
+            <Slider label="Position y" value={params.sourceY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("sourceY", v)} />
+            <Slider label="Propagation angle" value={params.sourceAngle} min={-75} max={75} step={5} unit="°" onChange={(v) => changeParam("sourceAngle", v)} />
+          </div>
+          <div className="control-group">
+            <p className="group-label"><span className="geometry-dot monitor-dot" />Monitor geometry</p>
+            <Slider label="Position x" value={params.monitorX} min={45} max={92} step={1} unit="%" onChange={(v) => changeParam("monitorX", v)} />
+            <Slider label="Position y" value={params.monitorY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("monitorY", v)} />
+            <Slider label="Normal angle" value={params.monitorAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("monitorAngle", v)} />
           </div>
           <div className="control-group last">
             <p className="group-label">Playback</p>
@@ -424,10 +560,15 @@ export default function Home() {
             <div className="legend"><span className="negative" /> −1 <span className="gradient" /> +1</div>
           </div>
           <div className="canvas-wrap">
-            <canvas className="field-canvas" ref={canvasRef} width={NX} height={NY} aria-label="Animated electric field simulation" />
+            <canvas
+              className="field-canvas"
+              ref={canvasRef}
+              width={NX}
+              height={NY}
+              style={{ aspectRatio: `${params.windowWidth} / ${params.windowHeight}` }}
+              aria-label="Animated electric field simulation"
+            />
             <span className="axis axis-y">y</span><span className="axis axis-x">x</span>
-            <span className="source-label">source</span>
-            <span className="monitor-label">DFT monitor</span>
           </div>
           <div className="transport">
             <div className="buttons">
@@ -443,7 +584,7 @@ export default function Home() {
       <section className="panel analysis-panel">
         <div className="analysis-head">
           <div><span className="section-number">03</span><h3>Frequency-domain monitor</h3></div>
-          <p>Complex field sampled behind the pillar at x = {(MONITOR_X * engine.dxNm / 1000).toFixed(2)} µm</p>
+          <p>Monitor center: ({params.monitorX}%, {params.monitorY}%) · normal {params.monitorAngle}°</p>
         </div>
         <div className="charts-grid">
           <article className="chart-card">
@@ -460,7 +601,7 @@ export default function Home() {
 
       <section className="metrics">
         <article><span>Grid</span><strong>{NX} × {NY}</strong><small>Yee cells</small></article>
-        <article><span>Cell size</span><strong>{engine.dxNm.toFixed(1)} nm</strong><small>λ / 20</small></article>
+        <article><span>Cell size</span><strong>{engine.dxNm.toFixed(1)} × {engine.dyNm.toFixed(1)} nm</strong><small>{cellsPerWavelength.toFixed(1)} cells / λ minimum</small></article>
         <article><span>Boundary</span><strong>{PML} cells</strong><small>graded absorber</small></article>
         <article><span>Polarization</span><strong>TM<sub>z</sub></strong><small>E<sub>z</sub>, H<sub>x</sub>, H<sub>y</sub></small></article>
       </section>

@@ -60,14 +60,14 @@ const defaults: Params = {
   stepsPerFrame: 3,
   windowWidth: 7.65,
   windowHeight: 5.1,
-  pillarX: 54,
-  pillarY: 50,
+  pillarX: 4.13,
+  pillarY: 2.55,
   pillarAngle: 0,
-  sourceX: 12,
-  sourceY: 50,
+  sourceX: 0.92,
+  sourceY: 2.55,
   sourceAngle: 0,
-  monitorX: 76,
-  monitorY: 50,
+  monitorX: 5.81,
+  monitorY: 2.55,
   monitorAngle: 0,
 };
 
@@ -112,8 +112,8 @@ function createEngine(params: Params): Engine {
   const coefficientY = dtNmC / dyNm;
   const epsilon = new Float32Array(size).fill(1);
   const damping = new Float32Array(size).fill(1);
-  const pillarCenterX = (params.pillarX / 100) * widthNm;
-  const pillarCenterY = (params.pillarY / 100) * heightNm;
+  const pillarCenterX = params.pillarX * 1000;
+  const pillarCenterY = params.pillarY * 1000;
   const pillarAngle = (params.pillarAngle * Math.PI) / 180;
   const cosPillar = Math.cos(pillarAngle);
   const sinPillar = Math.sin(pillarAngle);
@@ -149,8 +149,8 @@ function createEngine(params: Params): Engine {
     return { x, y, index: Math.round(x) + Math.round(y) * NX };
   });
   const sourcePoints = buildLinePoints(
-    (params.sourceX / 100) * widthNm,
-    (params.sourceY / 100) * heightNm,
+    params.sourceX * 1000,
+    params.sourceY * 1000,
     params.sourceAngle,
     widthNm,
     heightNm,
@@ -158,8 +158,8 @@ function createEngine(params: Params): Engine {
     dyNm,
   );
   const monitorPoints = buildLinePoints(
-    (params.monitorX / 100) * widthNm,
-    (params.monitorY / 100) * heightNm,
+    params.monitorX * 1000,
+    params.monitorY * 1000,
     params.monitorAngle,
     widthNm,
     heightNm,
@@ -442,6 +442,18 @@ export default function Home() {
 
   const changeParam = (key: keyof Params, value: number, resetField = true) => {
     const next = { ...paramsRef.current, [key]: value };
+    if (key === "windowWidth") {
+      const margin = value * PML / NX;
+      (["pillarX", "sourceX", "monitorX"] as const).forEach((positionKey) => {
+        next[positionKey] = Number(Math.min(value - margin, Math.max(margin, next[positionKey])).toFixed(2));
+      });
+    }
+    if (key === "windowHeight") {
+      const margin = value * PML / NY;
+      (["pillarY", "sourceY", "monitorY"] as const).forEach((positionKey) => {
+        next[positionKey] = Number(Math.min(value - margin, Math.max(margin, next[positionKey])).toFixed(2));
+      });
+    }
     paramsRef.current = next;
     setParams(next);
     if (resetField) reset(next);
@@ -488,6 +500,10 @@ export default function Home() {
   const engine = engineRef.current;
   const timeFs = displayStep * engine.dtNmC / 299.792458;
   const cellsPerWavelength = params.wavelength / Math.max(engine.dxNm, engine.dyNm);
+  const xMargin = Number((params.windowWidth * PML / NX).toFixed(2));
+  const yMargin = Number((params.windowHeight * PML / NY).toFixed(2));
+  const xMaximum = Number((params.windowWidth - xMargin).toFixed(2));
+  const yMaximum = Number((params.windowHeight - yMargin).toFixed(2));
 
   return (
     <main>
@@ -514,6 +530,7 @@ export default function Home() {
             <div><span className="section-number">01</span><h3>Field &amp; material</h3></div>
             <button className="text-button" onClick={() => { paramsRef.current = defaults; setParams(defaults); reset(defaults); }}>Defaults</button>
           </div>
+          <p className="coordinate-help">x/y coordinates are measured from the lower-left corner.</p>
           <div className="control-group">
             <p className="group-label">Incident wave</p>
             <Slider label="Wavelength" value={params.wavelength} min={500} max={1200} step={10} unit=" nm" onChange={(v) => changeParam("wavelength", v)} />
@@ -529,8 +546,8 @@ export default function Home() {
             <Slider label="Refractive index" value={params.refractiveIndex} min={1} max={4} step={0.1} unit="" onChange={(v) => changeParam("refractiveIndex", v)} />
             <Slider label="Width" value={params.pillarWidth} min={100} max={800} step={25} unit=" nm" onChange={(v) => changeParam("pillarWidth", v)} />
             <Slider label="Length" value={params.pillarLength} min={200} max={1600} step={50} unit=" nm" onChange={(v) => changeParam("pillarLength", v)} />
-            <Slider label="Position x" value={params.pillarX} min={20} max={80} step={1} unit="%" onChange={(v) => changeParam("pillarX", v)} />
-            <Slider label="Position y" value={params.pillarY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("pillarY", v)} />
+            <Slider label="Center x" value={params.pillarX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("pillarX", v)} />
+            <Slider label="Center y" value={params.pillarY} min={yMargin} max={yMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("pillarY", v)} />
             <Slider label="Orientation" value={params.pillarAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("pillarAngle", v)} />
           </div>
         </aside>
@@ -553,6 +570,9 @@ export default function Home() {
               aria-label="Animated electric field simulation"
             />
             <span className="axis axis-y">y</span><span className="axis axis-x">x</span>
+            <span className="scale-label scale-origin">0</span>
+            <span className="scale-label scale-x-max">{params.windowWidth} µm</span>
+            <span className="scale-label scale-y-max">{params.windowHeight} µm</span>
           </div>
           <div className="transport">
             <div className="buttons">
@@ -568,16 +588,17 @@ export default function Home() {
           <div className="panel-heading">
             <div><span className="section-number">03</span><h3>Placement</h3></div>
           </div>
+          <p className="coordinate-help">Source and monitor centers use the same µm coordinate system.</p>
           <div className="control-group">
             <p className="group-label"><span className="geometry-dot source-dot" />Source geometry</p>
-            <Slider label="Position x" value={params.sourceX} min={8} max={45} step={1} unit="%" onChange={(v) => changeParam("sourceX", v)} />
-            <Slider label="Position y" value={params.sourceY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("sourceY", v)} />
+            <Slider label="Center x" value={params.sourceX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("sourceX", v)} />
+            <Slider label="Center y" value={params.sourceY} min={yMargin} max={yMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("sourceY", v)} />
             <Slider label="Propagation angle" value={params.sourceAngle} min={-75} max={75} step={5} unit="°" onChange={(v) => changeParam("sourceAngle", v)} />
           </div>
           <div className="control-group">
             <p className="group-label"><span className="geometry-dot monitor-dot" />Monitor geometry</p>
-            <Slider label="Position x" value={params.monitorX} min={45} max={92} step={1} unit="%" onChange={(v) => changeParam("monitorX", v)} />
-            <Slider label="Position y" value={params.monitorY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("monitorY", v)} />
+            <Slider label="Center x" value={params.monitorX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("monitorX", v)} />
+            <Slider label="Center y" value={params.monitorY} min={yMargin} max={yMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("monitorY", v)} />
             <Slider label="Normal angle" value={params.monitorAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("monitorAngle", v)} />
           </div>
           <div className="control-group last">
@@ -590,7 +611,7 @@ export default function Home() {
       <section className="panel analysis-panel">
         <div className="analysis-head">
           <div><span className="section-number">04</span><h3>Frequency-domain monitor</h3></div>
-          <p>Monitor center: ({params.monitorX}%, {params.monitorY}%) · normal {params.monitorAngle}°</p>
+          <p>Monitor center: ({params.monitorX} µm, {params.monitorY} µm) · normal {params.monitorAngle}°</p>
         </div>
         <div className="charts-grid">
           <article className="chart-card">

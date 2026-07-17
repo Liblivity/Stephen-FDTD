@@ -511,7 +511,7 @@ export default function Home() {
       <section className="workspace">
         <aside className="panel controls-panel">
           <div className="panel-heading">
-            <div><span className="section-number">01</span><h3>Parameters</h3></div>
+            <div><span className="section-number">01</span><h3>Field &amp; material</h3></div>
             <button className="text-button" onClick={() => { paramsRef.current = defaults; setParams(defaults); reset(defaults); }}>Defaults</button>
           </div>
           <div className="control-group">
@@ -532,22 +532,6 @@ export default function Home() {
             <Slider label="Position x" value={params.pillarX} min={20} max={80} step={1} unit="%" onChange={(v) => changeParam("pillarX", v)} />
             <Slider label="Position y" value={params.pillarY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("pillarY", v)} />
             <Slider label="Orientation" value={params.pillarAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("pillarAngle", v)} />
-          </div>
-          <div className="control-group">
-            <p className="group-label"><span className="geometry-dot source-dot" />Source geometry</p>
-            <Slider label="Position x" value={params.sourceX} min={8} max={45} step={1} unit="%" onChange={(v) => changeParam("sourceX", v)} />
-            <Slider label="Position y" value={params.sourceY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("sourceY", v)} />
-            <Slider label="Propagation angle" value={params.sourceAngle} min={-75} max={75} step={5} unit="°" onChange={(v) => changeParam("sourceAngle", v)} />
-          </div>
-          <div className="control-group">
-            <p className="group-label"><span className="geometry-dot monitor-dot" />Monitor geometry</p>
-            <Slider label="Position x" value={params.monitorX} min={45} max={92} step={1} unit="%" onChange={(v) => changeParam("monitorX", v)} />
-            <Slider label="Position y" value={params.monitorY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("monitorY", v)} />
-            <Slider label="Normal angle" value={params.monitorAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("monitorAngle", v)} />
-          </div>
-          <div className="control-group last">
-            <p className="group-label">Playback</p>
-            <Slider label="Steps per frame" value={params.stepsPerFrame} min={1} max={8} step={1} unit="×" onChange={(v) => changeParam("stepsPerFrame", v, false)} />
           </div>
         </aside>
 
@@ -579,11 +563,33 @@ export default function Home() {
             <div className="readout"><span>Step <strong>{displayStep.toLocaleString()}</strong></span><span>Time <strong>{timeFs.toFixed(2)} fs</strong></span></div>
           </div>
         </section>
+
+        <aside className="panel placement-panel">
+          <div className="panel-heading">
+            <div><span className="section-number">03</span><h3>Placement</h3></div>
+          </div>
+          <div className="control-group">
+            <p className="group-label"><span className="geometry-dot source-dot" />Source geometry</p>
+            <Slider label="Position x" value={params.sourceX} min={8} max={45} step={1} unit="%" onChange={(v) => changeParam("sourceX", v)} />
+            <Slider label="Position y" value={params.sourceY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("sourceY", v)} />
+            <Slider label="Propagation angle" value={params.sourceAngle} min={-75} max={75} step={5} unit="°" onChange={(v) => changeParam("sourceAngle", v)} />
+          </div>
+          <div className="control-group">
+            <p className="group-label"><span className="geometry-dot monitor-dot" />Monitor geometry</p>
+            <Slider label="Position x" value={params.monitorX} min={45} max={92} step={1} unit="%" onChange={(v) => changeParam("monitorX", v)} />
+            <Slider label="Position y" value={params.monitorY} min={15} max={85} step={1} unit="%" onChange={(v) => changeParam("monitorY", v)} />
+            <Slider label="Normal angle" value={params.monitorAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("monitorAngle", v)} />
+          </div>
+          <div className="control-group last">
+            <p className="group-label">Playback</p>
+            <Slider label="Steps per frame" value={params.stepsPerFrame} min={1} max={8} step={1} unit="×" onChange={(v) => changeParam("stepsPerFrame", v, false)} />
+          </div>
+        </aside>
       </section>
 
       <section className="panel analysis-panel">
         <div className="analysis-head">
-          <div><span className="section-number">03</span><h3>Frequency-domain monitor</h3></div>
+          <div><span className="section-number">04</span><h3>Frequency-domain monitor</h3></div>
           <p>Monitor center: ({params.monitorX}%, {params.monitorY}%) · normal {params.monitorAngle}°</p>
         </div>
         <div className="charts-grid">

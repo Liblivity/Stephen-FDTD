@@ -21,6 +21,9 @@ type Params = {
   pillarX: number;
   pillarY: number;
   pillarAngle: number;
+  pillarCount: number;
+  pillarPitch: number;
+  arrayAngle: number;
   sourceX: number;
   sourceY: number;
   sourceAngle: number;
@@ -46,7 +49,7 @@ type Engine = {
   dtNmC: number;
   coefficientX: number;
   coefficientY: number;
-  pillarPoints: Point[];
+  pillarPolygons: Point[][];
   sourcePoints: Point[];
   monitorPoints: Point[];
 };
@@ -63,6 +66,9 @@ const defaults: Params = {
   pillarX: 4.13,
   pillarY: 2.55,
   pillarAngle: 0,
+  pillarCount: 1,
+  pillarPitch: 600,
+  arrayAngle: 90,
   sourceX: 0.92,
   sourceY: 2.55,
   sourceAngle: 0,
@@ -112,20 +118,31 @@ function createEngine(params: Params): Engine {
   const coefficientY = dtNmC / dyNm;
   const epsilon = new Float32Array(size).fill(1);
   const damping = new Float32Array(size).fill(1);
-  const pillarCenterX = params.pillarX * 1000;
-  const pillarCenterY = params.pillarY * 1000;
+  const arrayCenterX = params.pillarX * 1000;
+  const arrayCenterY = params.pillarY * 1000;
   const pillarAngle = (params.pillarAngle * Math.PI) / 180;
   const cosPillar = Math.cos(pillarAngle);
   const sinPillar = Math.sin(pillarAngle);
+  const arrayAngle = (params.arrayAngle * Math.PI) / 180;
+  const pillarCenters = Array.from({ length: params.pillarCount }, (_, index) => {
+    const offset = (index - (params.pillarCount - 1) / 2) * params.pillarPitch;
+    return {
+      x: arrayCenterX + Math.cos(arrayAngle) * offset,
+      y: arrayCenterY + Math.sin(arrayAngle) * offset,
+    };
+  });
 
   for (let y = 0; y < NY; y++) {
     for (let x = 0; x < NX; x++) {
       const i = x + y * NX;
-      const relativeX = (x + 0.5) * dxNm - pillarCenterX;
-      const relativeY = (y + 0.5) * dyNm - pillarCenterY;
-      const localX = cosPillar * relativeX + sinPillar * relativeY;
-      const localY = -sinPillar * relativeX + cosPillar * relativeY;
-      if (Math.abs(localX) <= params.pillarLength / 2 && Math.abs(localY) <= params.pillarWidth / 2) {
+      const insidePillar = pillarCenters.some((center) => {
+        const relativeX = (x + 0.5) * dxNm - center.x;
+        const relativeY = (y + 0.5) * dyNm - center.y;
+        const localX = cosPillar * relativeX + sinPillar * relativeY;
+        const localY = -sinPillar * relativeX + cosPillar * relativeY;
+        return Math.abs(localX) <= params.pillarLength / 2 && Math.abs(localY) <= params.pillarWidth / 2;
+      });
+      if (insidePillar) {
         epsilon[i] = params.refractiveIndex ** 2;
       }
       const edge = Math.min(x, y, NX - 1 - x, NY - 1 - y);
@@ -136,18 +153,18 @@ function createEngine(params: Params): Engine {
     }
   }
 
-  const pillarPoints = [
-    [-params.pillarLength / 2, -params.pillarWidth / 2],
-    [params.pillarLength / 2, -params.pillarWidth / 2],
-    [params.pillarLength / 2, params.pillarWidth / 2],
-    [-params.pillarLength / 2, params.pillarWidth / 2],
-  ].map(([localX, localY]) => {
-    const physicalX = pillarCenterX + cosPillar * localX - sinPillar * localY;
-    const physicalY = pillarCenterY + sinPillar * localX + cosPillar * localY;
-    const x = physicalX / dxNm;
-    const y = physicalY / dyNm;
-    return { x, y, index: Math.round(x) + Math.round(y) * NX };
-  });
+  const pillarPolygons = pillarCenters.map((center) => [
+      [-params.pillarLength / 2, -params.pillarWidth / 2],
+      [params.pillarLength / 2, -params.pillarWidth / 2],
+      [params.pillarLength / 2, params.pillarWidth / 2],
+      [-params.pillarLength / 2, params.pillarWidth / 2],
+    ].map(([localX, localY]) => {
+      const physicalX = center.x + cosPillar * localX - sinPillar * localY;
+      const physicalY = center.y + sinPillar * localX + cosPillar * localY;
+      const x = physicalX / dxNm;
+      const y = physicalY / dyNm;
+      return { x, y, index: Math.round(x) + Math.round(y) * NX };
+    }));
   const sourcePoints = buildLinePoints(
     params.sourceX * 1000,
     params.sourceY * 1000,
@@ -184,7 +201,7 @@ function createEngine(params: Params): Engine {
     dtNmC,
     coefficientX,
     coefficientY,
-    pillarPoints,
+    pillarPolygons,
     sourcePoints,
     monitorPoints,
   };
@@ -262,12 +279,15 @@ function render(engine: Engine, canvas: HTMLCanvasElement) {
   context.strokeStyle = "#07111f";
   context.lineWidth = 1.2;
   context.beginPath();
-  engine.pillarPoints.forEach((point, index) => {
-    if (index === 0) context.moveTo(point.x, NY - point.y);
-    else context.lineTo(point.x, NY - point.y);
+  engine.pillarPolygons.forEach((polygon) => {
+    context.beginPath();
+    polygon.forEach((point, index) => {
+      if (index === 0) context.moveTo(point.x, NY - point.y);
+      else context.lineTo(point.x, NY - point.y);
+    });
+    context.closePath();
+    context.stroke();
   });
-  context.closePath();
-  context.stroke();
   context.strokeStyle = "#5df2c2";
   context.lineWidth = 0.8;
   context.beginPath();
@@ -519,7 +539,7 @@ export default function Home() {
       <section className="intro">
         <div>
           <p className="kicker">2D · TM<sub>z</sub> · FDTD</p>
-          <h2>See light interact<br />with a nanopillar.</h2>
+          <h2>Build a nanopillar array<br />and shape the wave.</h2>
         </div>
         <p className="lede">Adjust the structure and source in real time. The field is recomputed on a Yee grid directly in your browser.</p>
       </section>
@@ -542,13 +562,13 @@ export default function Home() {
             <Slider label="Window height" value={params.windowHeight} min={3} max={12} step={0.25} unit=" µm" onChange={(v) => changeParam("windowHeight", v)} />
           </div>
           <div className="control-group">
-            <p className="group-label">Nanopillar</p>
+            <p className="group-label">Pillar geometry</p>
             <Slider label="Refractive index" value={params.refractiveIndex} min={1} max={4} step={0.1} unit="" onChange={(v) => changeParam("refractiveIndex", v)} />
             <Slider label="Width" value={params.pillarWidth} min={100} max={800} step={25} unit=" nm" onChange={(v) => changeParam("pillarWidth", v)} />
             <Slider label="Length" value={params.pillarLength} min={200} max={1600} step={50} unit=" nm" onChange={(v) => changeParam("pillarLength", v)} />
-            <Slider label="Center x" value={params.pillarX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("pillarX", v)} />
-            <Slider label="Center y" value={params.pillarY} min={yMargin} max={yMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("pillarY", v)} />
-            <Slider label="Orientation" value={params.pillarAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("pillarAngle", v)} />
+            <Slider label="Array center x" value={params.pillarX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("pillarX", v)} />
+            <Slider label="Array center y" value={params.pillarY} min={yMargin} max={yMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("pillarY", v)} />
+            <Slider label="Pillar orientation" value={params.pillarAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("pillarAngle", v)} />
           </div>
         </aside>
 
@@ -589,6 +609,13 @@ export default function Home() {
             <div><span className="section-number">03</span><h3>Placement</h3></div>
           </div>
           <p className="coordinate-help">Source and monitor centers use the same µm coordinate system.</p>
+          <div className="control-group">
+            <p className="group-label">Pillar array</p>
+            <Slider label="Pillar count" value={params.pillarCount} min={1} max={12} step={1} unit="" onChange={(v) => changeParam("pillarCount", v)} />
+            <Slider label="Center-to-center pitch" value={params.pillarPitch} min={200} max={1600} step={25} unit=" nm" onChange={(v) => changeParam("pillarPitch", v)} />
+            <Slider label="Array-axis angle" value={params.arrayAngle} min={-90} max={90} step={5} unit="°" onChange={(v) => changeParam("arrayAngle", v)} />
+            <p className="coordinate-help">First-to-last center span: {((Math.max(0, params.pillarCount - 1) * params.pillarPitch) / 1000).toFixed(2)} µm</p>
+          </div>
           <div className="control-group">
             <p className="group-label"><span className="geometry-dot source-dot" />Source geometry</p>
             <Slider label="Center x" value={params.sourceX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("sourceX", v)} />

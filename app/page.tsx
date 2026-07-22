@@ -28,6 +28,7 @@ type Params = {
   sourceX: number;
   sourceY: number;
   sourceAngle: number;
+  sourceLength: number;
   monitorX: number;
   monitorY: number;
   monitorAngle: number;
@@ -75,6 +76,7 @@ const defaults: Params = {
   sourceX: 0.92,
   sourceY: 2.55,
   sourceAngle: 0,
+  sourceLength: 4.0,
   monitorX: 5.81,
   monitorY: 2.55,
   monitorAngle: 0,
@@ -88,11 +90,14 @@ function buildLinePoints(
   heightNm: number,
   dxNm: number,
   dyNm: number,
+  lineLengthNm?: number,
 ): Point[] {
   const angle = (normalAngleDegrees * Math.PI) / 180;
   const tangentX = -Math.sin(angle);
   const tangentY = Math.cos(angle);
-  const halfSpan = Math.hypot(widthNm, heightNm) * 0.55;
+  const halfSpan = lineLengthNm === undefined
+    ? Math.hypot(widthNm, heightNm) * 0.55
+    : lineLengthNm / 2;
   const points: Point[] = [];
   const seen = new Set<number>();
   const samples = Math.max(NX, NY) * 3;
@@ -176,6 +181,7 @@ function createEngine(params: Params): Engine {
     heightNm,
     dxNm,
     dyNm,
+    params.sourceLength * 1000,
   );
   const monitorPoints = buildLinePoints(
     params.monitorX * 1000,
@@ -656,6 +662,7 @@ export default function Home() {
             <p className="group-label"><span className="geometry-dot source-dot" />Source geometry</p>
             <Slider label="Center x" value={params.sourceX} min={xMargin} max={xMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("sourceX", v)} />
             <Slider label="Center y" value={params.sourceY} min={yMargin} max={yMaximum} step={0.05} unit=" µm" onChange={(v) => changeParam("sourceY", v)} />
+            <Slider label="Source length" value={params.sourceLength} min={0.2} max={12} step={0.1} unit=" µm" onChange={(v) => changeParam("sourceLength", v)} />
             <Slider label="Propagation angle" value={params.sourceAngle} min={-75} max={75} step={5} unit="°" onChange={(v) => changeParam("sourceAngle", v)} />
           </div>
           <div className="control-group">

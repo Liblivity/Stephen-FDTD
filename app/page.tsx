@@ -11,6 +11,7 @@ type Point = { x: number; y: number; index: number };
 
 type Params = {
   wavelength: number;
+  sourceMode: "continuous" | "pulse";
   refractiveIndex: number;
   pillarWidth: number;
   pillarLength: number;
@@ -42,6 +43,7 @@ type Engine = {
   monitorRe: Float64Array;
   monitorIm: Float64Array;
   monitorSamples: number;
+  pulseStartStep: number | null;
   step: number;
   periodSteps: number;
   dxNm: number;
@@ -56,6 +58,7 @@ type Engine = {
 
 const defaults: Params = {
   wavelength: 850,
+  sourceMode: "continuous",
   refractiveIndex: 2,
   pillarWidth: 300,
   pillarLength: 700,
@@ -194,6 +197,7 @@ function createEngine(params: Params): Engine {
     monitorRe: new Float64Array(monitorPoints.length),
     monitorIm: new Float64Array(monitorPoints.length),
     monitorSamples: 0,
+    pulseStartStep: null,
     step: 0,
     periodSteps: params.wavelength / dtNmC,
     dxNm,
@@ -230,9 +234,18 @@ function advance(engine: Engine, params: Params) {
     }
   }
 
-  const ramp = 1 - Math.exp(-((engine.step / (engine.periodSteps * 3)) ** 2));
-  const source =
-    params.amplitude * ramp * Math.sin((2 * Math.PI * engine.step) / engine.periodSteps);
+  let source = 0;
+  if (params.sourceMode === "continuous") {
+    const ramp = 1 - Math.exp(-((engine.step / (engine.periodSteps * 3)) ** 2));
+    source = params.amplitude * ramp * Math.sin((2 * Math.PI * engine.step) / engine.periodSteps);
+  } else if (engine.pulseStartStep !== null) {
+    const elapsed = engine.step - engine.pulseStartStep;
+    const center = engine.periodSteps * 4;
+    const spread = engine.periodSteps * 1.25;
+    const envelope = Math.exp(-(((elapsed - center) / spread) ** 2));
+    source = params.amplitude * envelope * Math.sin((2 * Math.PI * elapsed) / engine.periodSteps);
+    if (elapsed > center + 5 * spread) engine.pulseStartStep = null;
+  }
   engine.sourcePoints.forEach((point) => { ez[point.index] += source; });
 
   // Frequency-domain monitor: accumulate Ez * exp(-i omega t) after transients.
@@ -487,6 +500,24 @@ export default function Home() {
     setDisplayStep(engine.step);
   };
 
+  const selectSourceMode = (sourceMode: Params["sourceMode"]) => {
+    const next = { ...paramsRef.current, sourceMode };
+    paramsRef.current = next;
+    setParams(next);
+    reset(next);
+  };
+
+  const firePulse = () => {
+    let next = paramsRef.current;
+    if (next.sourceMode !== "pulse") {
+      next = { ...next, sourceMode: "pulse" };
+      paramsRef.current = next;
+      setParams(next);
+      reset(next);
+    }
+    engineRef.current.pulseStartStep = engineRef.current.step;
+  };
+
   useEffect(() => {
     let animationId = 0;
     let lastUiUpdate = 0;
@@ -553,6 +584,11 @@ export default function Home() {
           <p className="coordinate-help">x/y coordinates are measured from the lower-left corner.</p>
           <div className="control-group">
             <p className="group-label">Incident wave</p>
+            <div className="source-mode" role="group" aria-label="Source waveform">
+              <button className={params.sourceMode === "continuous" ? "active" : ""} onClick={() => selectSourceMode("continuous")}>Continuous</button>
+              <button className={params.sourceMode === "pulse" ? "active" : ""} onClick={() => selectSourceMode("pulse")}>Single pulse</button>
+            </div>
+            <button className="fire-pulse" onClick={firePulse} disabled={params.sourceMode !== "pulse"}>Fire pulse</button>
             <Slider label="Wavelength" value={params.wavelength} min={500} max={1200} step={10} unit=" nm" onChange={(v) => changeParam("wavelength", v)} />
             <Slider label="Source amplitude" value={params.amplitude} min={0.1} max={1} step={0.05} unit="" onChange={(v) => changeParam("amplitude", v, false)} />
           </div>
